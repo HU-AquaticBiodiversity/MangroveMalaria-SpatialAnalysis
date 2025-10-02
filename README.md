@@ -20,16 +20,4 @@ To access the ShinyApp with all path diagrams of the structural equation model (
 <b>country.table.csv</b> - Metadata for country selection including ISO codes and appropriate coordinate reference system (CRS).</br>
 <b>Coastal.PR.final.csv</b> - Malaria prevalence data from MalariaAtlas for 28 coastal countries with data point being 50 km or less off the coastline.</br></br>
 
-<i>NOTE: Access to health data (malaria infections) needs to be requested via the <a href="https://www.dhsprogram.com">Demographic and Health Surveys (DHS)</a> programme of USAID via </br>
-Therefore, the geographical coordinates of all the dataset below have been removed.</i>
-</br></br>
-<b>alldata.impute.csv</b> - .</br></br>
-<b>annual.raster.data.csv</b> - Values for raster layers, which are available for a multiple years incl. health management data and population density.</br></br>
-<b>const.raster.data.csv</b> - Values for raster layers, which are available for a single year.</br></br>
-<b>Coastal.PR.dhs.final.csv</b> - Malaria prevalence data from DHS for 28 coastal countries with data point being 50 km or less off the coastline.</br></br>
-<b>cropland.csv</b> - .</br></br>
-<b>Polygons_pr_malaria.shp</b> - Shape for buffer zones of 1 to 50 km around each unique (coastal) prevalence data location from the Coastal.PR.final.csv dataset. CRS: WGS84.</br></br>
-<b>ML_input_file.csv</b> - .</br></br>
-<b>ndvi_data.csv</b> - NDVI within mangroves for each shape in Polygons_pr_malaria.shp.</br></br>
-<b>nHDI_data.csv</b> - .</br></br>
-
+<i>NOTE: Health data (malaria infections) were accessed via the MalariaAtlas project. For a large portion of these data, access is restricted and needs to be requested via the <a href="https://www.dhsprogram.com">Demographic and Health Surveys (DHS)</a> programme of USAID.</br>
