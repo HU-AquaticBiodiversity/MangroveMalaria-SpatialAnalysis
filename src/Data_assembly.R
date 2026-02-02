@@ -43,7 +43,7 @@ countries.available = country.list %>% filter(ISO3 %in% coastal.PR$country_id)
 ## load malaria polygons with 10-km radius ##
 all_polygons.10 = st_read("./data/polygons_pr_malaria.shp") %>%
   bind_rows(st_read("./data/polygons_pr_malaria_dhs.shp")) %>%
-  filter(buffer == 10)
+  filter(buffer %in% c(5,10,20))
 
 nrow(all_polygons.10)
 #--> 4260 different locations
@@ -78,7 +78,9 @@ const.raster.data = pblapply(
       )
     }) %>% bind_cols() %>%
   mutate(lon = all_polygons.10$lon,
-         lat = all_polygons.10$lat)
+         lat = all_polygons.10$lat,
+         buffer = all_polygons.10$buffer) %>% 
+  filter(buffer == 10) %>% dplyr::select(-buffer)
 
  # change column names into something more meaningful #
 names(const.raster.data) = c('mosq.median', 'mosq.sd', 't_city.median', 't_city.sd', 
@@ -105,7 +107,6 @@ AMT = rast(list.files('./res/health_management/2024_GBD2023_Global_Antimalarial_
                       pattern = "2024_GBD2023", full.names = T))
 POP = rast(list.files('./res/population_density/', full.names = T))
 
-
 # code to be used to plot rasters for visualisation #
 ggplot() +  
   geom_spatraster(data = POP[[1]]) +
@@ -113,14 +114,14 @@ ggplot() +
 
  # extracting median and sd values for all rasters #
 annual.raster.data = lapply(list(ITN_use, ITN_access, IRS, AMT, POP), function(x) {
-
   exact_extract(x, all_polygons.10,
                 fun= c('median', 'stdev'))
   }) %>% bind_cols() %>%
   mutate(lon = all_polygons.10$lon,
-         lat = all_polygons.10$lat)  %>%
+         lat = all_polygons.10$lat,
+         buffer = all_polygons.10$buffer) %>%
   # rearrange table to extract metadata in names of files #
-  pivot_longer(!lon & !lat, names_to = 'dummy', values_to = 'value') %>%
+  pivot_longer(!lon & !lat & !buffer, names_to = 'dummy', values_to = 'value') %>%
   mutate(
     # extract year of measurement #
     year_start = as.numeric(ifelse(str_ends(dummy,"\\d"), 
@@ -205,7 +206,7 @@ weather.raster = terra::project(
 names(weather.raster) = lyr.names
 
 weather.data = exact_extract(weather.raster, all_polygons.10, fun= 'mean') %>% 
-  bind_cols(all_polygons.10 %>% st_drop_geometry() %>% dplyr::select(lon, lat))
+  bind_cols(all_polygons.10 %>% st_drop_geometry() %>% dplyr::select(lon, lat, buffer))
 
 #export cropland dataframe
 write.csv(weather.data, "./data/weather_data.csv", row.names = F)
@@ -239,12 +240,14 @@ shp.subnat = st_read("./res/GDL_Shapefiles_V6.3/GDL Shapefiles V6.3 large.shp") 
 
 ## adapt cropland dataframe
 lc_all = read.csv("./data/cropland.csv") %>%
-  dplyr::select(- buffer) %>%
   pivot_longer(cols = starts_with("lc_"),
                names_to = "year",
                values_to = "lc_crop",
                values_drop_na = TRUE) %>%
-  mutate(year = as.numeric(str_extract(year, pattern = "\\d{4}")))
+  mutate(year = as.numeric(str_extract(year, pattern = "\\d{4}"))) %>%
+  # arrange 5 and 20-km values as additional columns
+  mutate(buffer = ifelse(buffer == 10, "lc_crop", paste0("lc_crop", "_", buffer))) %>%
+  pivot_wider(names_from = "buffer", values_from = "lc_crop")
 
 ## load mangrove cover data frame ##
 mangrove.cover = vroom(list.files("data/MangroveCover", full.names = T),
@@ -263,12 +266,24 @@ coastal.PR.all = read.csv("./data/coastal.PR.final.csv", sep = ",", header = T) 
            crs = st_crs(4326), dim = "XY") %>%
   st_join(shp.subnat) %>%
   st_drop_geometry() %>%
+  
   ##  add constant raster data ##
   left_join(read.csv("./data/const.raster.data.csv")) %>%
   # add cropland data
   left_join(lc_all, by = c("year_start" = "year", 'lon', 'lat')) %>%
   # add annual raster data
-  left_join(read.csv("./data/annual.raster.data.csv"),
+  left_join(
+    read.csv("./data/annual.raster.data.csv") %>%
+      # select only default buffer of 10 km
+      filter(buffer == 10) %>%
+      dplyr::select(-buffer) %>%
+      # make 5 and 20-km buffers additional columns for pop_dens
+      mutate(
+        pop_dens_median_5 = read.csv("./data/annual.raster.data.csv") %>%
+          filter(buffer == 5) %>% dplyr::select(pop_dens_median) %>% unlist(),
+        pop_dens_median_20 = read.csv("./data/annual.raster.data.csv") %>%
+          filter(buffer == 20) %>% dplyr::select(pop_dens_median) %>% unlist()
+        ),
             by = c('year_start', 'lon', 'lat')) %>%
   # add mangrove cover
   right_join(mangrove.cover, by = c("year_start" = "year", 'lon', 'lat'),
@@ -288,7 +303,6 @@ coastal.PR.all = read.csv("./data/coastal.PR.final.csv", sep = ",", header = T) 
 ## calculating mean ndvi for each row of disease data ##
 ## -------------------------------------------------- ##
 # load ndvi data
-
 ndvi.data = list.files("./data/NDVI.data/", full.names = T) %>%
   map_df(~read_csv(.))
 
@@ -330,80 +344,101 @@ stopCluster(clust)
 ## ----------------------------------------------------- ##
 ## calculating weather data for each row of disease data ##
 ## ----------------------------------------------------- ##
-## --> weather table needs to be prepared
-weather.table = read.csv("./data/weather_data.csv") %>% 
-  # pivot to process column names
-  pivot_longer(c(!lat & ! lon), names_to = "measure", values_to = "value") %>%
-  # remove unnecessary text
-  mutate(measure = str_replace(
-    str_replace(
-      str_replace(measure, "_1991\\.2020", ""),
-      "mean\\.1month_", ""),
-    "_Global_ea", "")) %>%
-  # split information
-  separate(measure, c('measure.1', 'measure.2', 'date'), sep = "_") %>%
-  # merge variable info
-  unite(measure, c(measure.1, measure.2)) %>%
-  # place variables next to each other
-  pivot_wider(names_from = measure, values_from = value) %>%
-  # split month and year
-  mutate(date = paste(str_sub(date, 1, 4), str_sub(date, 5, 6), "01", sep = "-"))
+weather = function(b) {
+  ## --> weather table needs to be prepared
+  weather.table = read.csv("./data/weather_data.csv") %>%
+    filter(buffer == b) %>%
+    dplyr::select(-buffer) %>%
+    # pivot to process column names
+    pivot_longer(c(!lat & ! lon), names_to = "measure", values_to = "value") %>%
+    # remove unnecessary text
+    mutate(measure = str_replace(
+      str_replace(
+        str_replace(measure, "_1991\\.2020", ""),
+        "mean\\.1month_", ""),
+      "_Global_ea", "")) %>%
+    # split information
+    separate(measure, c('measure.1', 'measure.2', 'date'), sep = "_") %>%
+    # merge variable info
+    unite(measure, c(measure.1, measure.2)) %>%
+    # place variables next to each other
+    pivot_wider(names_from = measure, values_from = value) %>%
+    # split month and year
+    mutate(date = paste(str_sub(date, 1, 4), str_sub(date, 5, 6), "01", sep = "-"))
+  
+  ## 1. Run for weather WITHIN survey period ##
+  # make cluster for parallel computation
+  clust <- makeCluster(n.cores - 1)
+  clusterExport(clust, c("coastal.PR.all", "weather.table"), envir=environment())
+  
+  system.time({
+    weather.data = parLapply(clust, 1:nrow(coastal.PR.all), function(x) {
+      # need to load R packages again in cluster
+      library(dplyr)
+      library(lubridate)
+      
+      a = weather.table %>%
+        filter(lat == coastal.PR.all[x,]$lat &
+                 lon == coastal.PR.all[x,]$lon) %>%
+        filter(between(as.Date(date), 
+                       as.Date(paste(coastal.PR.all[x,]$year_start,
+                                     coastal.PR.all[x,]$month_start, "1", sep = "-")),
+                       as.Date(paste(coastal.PR.all[x,]$year_end,
+                                     coastal.PR.all[x,]$month_end,
+                                     "1", sep = "-")) %m+% months(1))) %>%
+        select(anomaly_2t:mean_tp)
+      colMeans(a)
+    }) %>%
+      bind_rows()
+  })
+  stopCluster(clust)
+  env <- foreach:::.foreachGlobals
+  rm(list=ls(name=env), pos=env)
+  
+  ## 1. Run for weather BEFORE survey period ##
+  # make cluster for parallel computation
+  clust <- makeCluster(n.cores - 1)
+  clusterExport(clust, c("coastal.PR.all", "weather.table"), 
+                envir=environment())
+  
+  system.time({
+    weather.data.min6 = parLapply(clust, 1:nrow(coastal.PR.all), function(x) {
+      # need to load R packages again in cluster
+      library(dplyr)
+      library(lubridate)
+      
+      a = weather.table %>%
+        filter(lat == coastal.PR.all[x,]$lat &
+                 lon == coastal.PR.all[x,]$lon) %>%
+        filter(between(as.Date(date), 
+                       as.Date(paste(coastal.PR.all[x,]$year_start,
+                                     coastal.PR.all[x,]$month_start, 
+                                     "1", sep = "-")) %m-% months(6),
+                       as.Date(paste(coastal.PR.all[x,]$year_end,
+                                     coastal.PR.all[x,]$month_end,
+                                     "1", sep = "-")) )) %>%
+        select(anomaly_2t:mean_tp)
+      colSums(a)
+    }) %>%
+      bind_rows() %>%
+      rename_with(~ paste(., "6m", sep = "_"))
+  })
+  
+  stopCluster(clust)
+  
+  t = cbind(weather.data, weather.data.min6)
+  
+  if(b == 10) {
+    t
+  } else {
+    t %>%
+      rename_with(~ paste(., b, sep = "_"))
+  }
+  
+}
 
-## 1. Run for weather WITHIN survey period ##
-# make cluster for parallel computation
-clust <- makeCluster(n.cores - 1)
-clusterExport(clust, c("coastal.PR.all", "weather.table"))
-
-system.time({
-  weather.data = parLapply(clust, 1:nrow(coastal.PR.all), function(x) {
-    # need to load R packages again in cluster
-    library(dplyr)
-    library(lubridate)
-    
-    a = weather.table %>%
-      filter(lat == coastal.PR.all[x,]$lat &
-               lon == coastal.PR.all[x,]$lon) %>%
-      filter(between(as.Date(date), 
-                     as.Date(paste(coastal.PR.all[x,]$year_start,
-                                   coastal.PR.all[x,]$month_start, "1", sep = "-")),
-                     as.Date(paste(coastal.PR.all[x,]$year_end,
-                                   coastal.PR.all[x,]$month_end,
-                                   "1", sep = "-")) %m+% months(1))) %>%
-      select(anomaly_2t:mean_tp)
-    colMeans(a)
-  }) %>%
-    bind_rows()
-})
-stopCluster(clust)
-
-## 1. Run for weather BEFORE survey period ##
-# make cluster for parallel computation
-clust <- makeCluster(n.cores - 1)
-clusterExport(clust, c("coastal.PR.all", "weather.table"))
-
-system.time({
-  weather.data.min6 = parLapply(clust, 1:nrow(coastal.PR.all), function(x) {
-    # need to load R packages again in cluster
-    library(dplyr)
-    library(lubridate)
-    
-    a = weather.table %>%
-      filter(lat == coastal.PR.all[x,]$lat &
-               lon == coastal.PR.all[x,]$lon) %>%
-      filter(between(as.Date(date), 
-                     as.Date(paste(coastal.PR.all[x,]$year_start,
-                                   coastal.PR.all[x,]$month_start, 
-                                   "1", sep = "-")) %m-% months(6),
-                     as.Date(paste(coastal.PR.all[x,]$year_end,
-                                   coastal.PR.all[x,]$month_end,
-                                   "1", sep = "-")) )) %>%
-      select(anomaly_2t:mean_tp)
-    colSums(a)
-  }) %>%
-    bind_rows()
-})
-
-stopCluster(clust)
+weather_all = pblapply(c(5,10,20), function(x) weather(x)) %>%
+  bind_cols()
 
 ## ----------------- ##
 ## FINAL DATA MERGER ##
@@ -411,9 +446,7 @@ stopCluster(clust)
 all.data = coastal.PR.all %>%
   mutate(mean.ndvi = ndvi.mean,
          mangrove.cover = mangrove.cover/(pi*(buffer**2))) %>%
-  bind_cols(weather.data, 
-            weather.data.min6 %>%
-              rename_with(~ paste(., "6m", sep = "_"))) %>%
+  bind_cols(weather_all) %>%
   filter(mangrove.cover != 0) %>%
   select(-gdlcode)
 
