@@ -151,32 +151,3 @@ lapply(years, function(y) {
   print(paste("Year", y, ": Done!", sep = " "))
   print(time.taken)
 })
-
-
-
-
-################################
-# OLD CODE #
-################################
-
-## EXPORT data for each year
-if(nrow(me.table) == 1) {
-  st_write(st_collection_extract(me.table, type = "POLYGON"),
-           paste('./data/MangrovePolygons/MangrovePolygons_', y,
-                 '_dhs.shp'))
-} else {
-  lapply(1:ceiling(nrow(me.table)/1000), function(split) {
-    ifelse(split == ceiling(nrow(me.table)/1000), max = nrow(me.table),
-           max = ((split-1)*1000+1000))
-    min = ((split-1)*1000+1)
-    st_write(
-      st_collection_extract(me.table, type = "POLYGON")[min:max,],
-      paste('./data/MangrovePolygons/MangrovePolygons_', y,
-            '_dhs_', split, '.shp'))
-  })
-}
-
-## EXPORT data for each year
-# note: if the file were to exceed 2GB, it cannot be saved as shp.
-#       I recommend using gpkg instead.
-st_write(me.table, paste0('./data/MangrovePolygons/MangrovePolygons_', y, '.shp'))

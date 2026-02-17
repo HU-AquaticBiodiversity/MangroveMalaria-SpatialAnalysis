@@ -18,140 +18,178 @@ library(GGally)
 library(ggsflabel)
 library(sf)
 library(cowplot)
+library(ComplexHeatmap)
+library(tidyverse)
+library(circlize)
 
-##-------------------------------------------
-## Functions for checking models
-##-------------------------------------------
-model_interpretation = function(sem_model) {
+# load functions for model comparison
+source("./src/functions.model_fitting.R")
 
-  # list results of f test and filter out significant ones
-  f_test = pblapply(1:50, function(x) {
-    if(class(sem_model[[x]]) != "try-error") {
-      unlist(c(sem_model[[x]][[3]], buffer = x))
+##----------------------------------------------------------##
+## Robustness checks
+##----------------------------------------------------------##
+
+# create data frame including shortened labels
+pretty.labels = data.frame(
+  nodes = c("pr.new", "mean_ndvi", "mangrove_cover", "mangrove.cover.min1",
+            "coastline.dist", "lc_crop", "pop_dens_median",
+            "anomaly_2t", "anomaly_tp",
+            "mean_2t_6m", "mean_tp_6m",
+            "mean_2t", "mean_tp", 
+            "anomaly_2t_6m", "anomaly_tp_6m"),
+  new.labels.short = c(
+    "MP", "MN", 
+    "MC","MC(-1)",
+    "CD", "AL", "PD",
+    "T_Anom", "P_Anom", "T_6m", "P_6m", "T", "P", "T_Anom_6m", "P_Anom_6m"
+  )
+)
+
+# find model files
+file.list = list.files("./data/", pattern = "sem_results.+\\.rds")
+file.table = as.data.frame(file.list) %>%
+  mutate(fl2 = str_sub(file.list, start = 13, end = -5)) %>%
+  separate(fl2, c("round", "type"), sep = "_") %>%
+  mutate(type = ifelse(is.na(type), "", type))
+
+# load model files and re-organise
+opt.models = lapply(1:6, function(mtype){
+
+  # which is the last round for each model type?
+  last.round = (filter(file.table, type == unique(file.table$type)[mtype]) %>%
+     slice_max(round))$file.list
+  
+  # load respective optimised model
+  best.model = readRDS(paste0("./data/", last.round))
+  
+  # extract estimates
+  pblapply(1:50, function(buffer) {
+    if(class(best.model[[buffer]]) != "try-error") {
+      best.model[[buffer]][[4]] %>%
+        dplyr::select(Response, Predictor, P.Value, Std.Estimate) %>%
+        mutate(buffer = buffer, mtype = unique(file.table$type)[mtype])
     }
   }) %>% bind_rows() %>%
-    filter(P.Value > .05)
+    mutate(
+      Predictor = ifelse(endsWith(Predictor, "_20") | endsWith(Predictor,"_5"),
+                         str_replace(Predictor, "\\_(5|20)", ""), Predictor)) %>%
+    filter(!grepl("sqr$", Predictor) &
+             !(Predictor %in% c("t_healthcare_motor.median", 
+                                "ITN_access_mean_median"))) %>%
+    left_join(pretty.labels , by = c("Predictor" = "nodes"))  %>%
+    left_join(pretty.labels , by = c("Response" = "nodes")) %>%
+    mutate(Predictor = new.labels.short.x,
+           Response = new.labels.short.y) %>%
+    dplyr::select(-starts_with("new"))
+})
 
-  ## find all paths that need to be removed ##
-  ## --> values indicate the share of models that do NOT support the relationship
-  ##     1.00 means no model supports it
-  paths_to_drop = pblapply(f_test$buffer, function(x) {
-    # check for errors
-    if(class(sem_model[[x]]) != "try-error") {
-      # remove columns with significant levels
-      sem_model[[x]][[4]][,1:8] %>%
-        # select effects with p > 0.05
-        filter(P.Value > 0.05) %>%
-        # merge and select response-predictor combinations without support
-        unite('paths', c(Response, Predictor), sep = '-') %>%
-        dplyr::select(paths) %>% unlist
-    }
-  })
+# define best model
+best.model = opt.models[[1]] %>% dplyr::select(-mtype)
+
+# create matrices
+robust.mat = lapply(2:6, function(eff){
+
+  eff.size = opt.models[[eff]] %>%
+    dplyr::select(-mtype)
   
-  ## find all paths that need to be added ##
-  paths_to_add = pblapply(f_test$buffer, function(x) {
-    # check for errors
-    if(class(sem_model[[x]]) != "try-error") {
-      # remove columns with signficant levels
-      sem_model[[x]][[2]][,1:5] %>%
-        # select effects with p > 0.05
-        filter(P.Value < 0.05) %>%
-        dplyr::select(Independ.Claim) %>% unlist
-    }
-  })
-  
-  #output results
-  output = list(f_test, 
-                # print list of all paths unsupported across support models
-                table(unlist(paths_to_drop))/nrow(f_test),
-                # print list of paths to be added
-                table(unlist(paths_to_add))/nrow(f_test))
-  names(output) = c("F_Test", "paths_to_drop", "paths_to_add")
-  output
+  best.model %>%
+    left_join(eff.size, by = c("Response", "Predictor", "buffer")) %>%
+    mutate(Estimate.diff = Std.Estimate.x - Std.Estimate.y) %>%
+    dplyr::select(-P.Value.x, -P.Value.y, -Std.Estimate.x, -Std.Estimate.y) %>%
+    pivot_wider(names_from = buffer, values_from = Estimate.diff) %>%
+    unite("relationship", Response:Predictor, sep = "-") %>%
+    column_to_rownames("relationship")
+})
+
+# build heatmaps
+ht_list = NULL  ## Heatmap(...) + NULL gives you a HeatmapList object
+title.vec = c("20 km", "5 km", "reduced", "new variables", "weather-sqr")
+for(s in c(3,2,1,4,5)) {
+  ht_list = ht_list + Heatmap(as.matrix(robust.mat[[s]][,-1]), 
+                              cluster_rows = F, cluster_columns = F,
+                              col=colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+                              column_title = title.vec[s],
+                              show_heatmap_legend = ifelse(s == 1, T, F),
+                              row_names_side = "left",
+                              column_names_gp = gpar(fontsize = 10),
+                              column_names_rot = 45,
+                              row_title = "relationships",
+                              #column_title = "test",
+                              heatmap_legend_param = list(
+                                legend_height = unit(4, "cm"),
+                                title = "Deviation"
+                                ))
 }
 
-model_optim_info = function(sem_results, name) {
-  ptd = data.frame(model_interpretation(sem_results)$paths_to_drop) %>%
-    separate(col = Var1, c("dependent", "independent"), sep = "-") %>%
-    filter(Freq == 1)
-  
-  write.table(ptd, file = paste0("./data/", name,"_ptd.csv"), sep = ",")
-  
-  pta = data.frame(model_interpretation(sem_results)$paths_to_add) %>%
-    separate(col = Var1, c("dependent", "x", "independent", "y", "z"), sep = " ") %>%
-    dplyr::select(-x, -y, -z) %>%
-    filter(Freq >= .1)
-  
-  write.table(pta, paste0(file = "./data/", name,"_pta.csv"), sep = ",")
-}
+ht_list
 
-##----------------------------------------------------------##
-## Model comparison
-##----------------------------------------------------------##
-
-# load results
-load("./data/sem_results_1.Rdata")
-load("./data/sem_results_small_1.Rdata")
-load("./data/sem_results_1_sqr.Rdata")
-load("./data/sem_results_2.Rdata")
-load("./data/sem_results_small_2.Rdata")
-load("./data/sem_results_2_sqr.Rdata")
-load("./data/sem_results_3.Rdata")
-load("./data/sem_results_small_3.Rdata")
-load("./data/sem_results_3_sqr.Rdata")
-load("./data/sem_results_4_sqr.Rdata")
-load("./data/sem_results_5_sqr.Rdata")
-load("./data/sem_results_6_sqr.Rdata")
+# save figure with heatmaps
+svg(file="./Figures/heatmap_robustness_v1.svg", width=11.7, height=8.3)
+draw(ht_list)
+dev.off()
 
 # export best model as rds file for Shiny App
+sem_results_3 = readRDS("./data/sem_results_3.rds")
 saveRDS(sem_results_3, 
         file = "./src/Mangrove-Malaria_ShinyApp/sem_results_3.rds")
 
-# show model diagnostics
-model_interpretation(sem_results_1)
-model_interpretation(sem_results_small_1)
-model_interpretation(sem_results_1_sqr)
 
-model_interpretation(sem_results_2)
-model_interpretation(sem_results_small_2)
-model_interpretation(sem_results_2_sqr)
+##----------------------------------------------------------------
+## Support of optimisation steps
+##----------------------------------------------------------------
 
-model_interpretation(sem_results_3)
-model_interpretation(sem_results_small_3)
-model_interpretation(sem_results_3_sqr)
+models = pblapply(1:nrow(file.table), function(x) {
+  readRDS(paste0("./data/", file.table[x, "file.list"]))
+})
 
-model_interpretation(sem_results_4_sqr)
+rm(m)
 
-model_interpretation(sem_results_5_sqr)
+# extract test results
+model_support = lapply(1:length(models),
+                       function(m){
+                         # check for errors
+                         lapply(1:50, function(x) {
+                           if(class(models[[m]][[x]]) != "try-error") {
+                             models[[m]][[x]][[3]]
+                           }
+                         })  %>%
+                           bind_rows() %>%
+                           mutate(model = str_sub(file.table$file.list, end = 13)[m],
+                                  round = file.table$round[m],
+                                  type = file.table$type[m])
+                       }) %>%
+  bind_rows() %>%
+  mutate(type = factor(type, levels = c("", "small", "5k", "20k", "newvars", "sqr")))
 
-model_interpretation(sem_results_6_sqr)
 
-# export paths to drop and add to optimise models
-model_optim_info(sem_results_1, "sem_results_1")
-model_optim_info(sem_results_small_1, "sem_results_small_1")
-model_optim_info(sem_results_1_sqr, "sem_results_1_sqr")
+# create plot with test results as violin plots
+opt.plot = ggplot(data = model_support, aes(x = round, y = Fisher.C, fill = type)) +
+  geom_violin(trim = F, position = "dodge") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Dark2", name = "Model type",
+                    labels = c("main", "reduced", "5-km", "20-km",    
+                               "new variables",  "weather-qdr")) +
+  facet_grid( ~ round, scale = "free") +
+  theme(legend.position = "bottom",
+        legend.direction = "horizontal",
+        strip.text.x = element_blank()
+        ) +
+  xlab('Optimisation step') + ylab("Fisher's C statistic")
+opt.plot
 
-model_optim_info(sem_results_2, "sem_results_2")
-model_optim_info(sem_results_small_2, "sem_results_small_2")
-model_optim_info(sem_results_2_sqr, "sem_results_2_sqr")
-
-model_optim_info(sem_results_3, "sem_results_3")
-model_optim_info(sem_results_small_3, "sem_results_small_3")
-model_optim_info(sem_results_3_sqr, "sem_results_3_sqr")
-
-model_optim_info(sem_results_4_sqr, "sem_results_4_sqr")
-
-model_optim_info(sem_results_5_sqr, "sem_results_5_sqr")
-
-model_optim_info(sem_results_6_sqr, "sem_results_6_sqr")
-
-# show formulas of optimised models
-load("./data/start.formulas.3.Rdata")
-load("./data/start.formulas.3.small.Rdata")
-load("./data/start.formulas.6.sqr.Rdata")
-start.formulas.3
-start.formulas.3.small
-start.formulas.6.sqr
+# export plots
+ps.options(family = "Arial")
+ggsave(filename="./Figures/ModelOptim_v3.svg", device = "svg", 
+       width = 210, height = 105, units = "mm")
+ggsave(filename="./Figures/ModelOptim_v3.png", device = "png", 
+       width = 210, height = 105, units = "mm")
+ggsave(filename="./Figures/ModelOptim_v3.pdf", device = cairo_pdf, 
+       width = 210, height = 105, units = "mm")
+cairo_ps(filename="./Figures/ModelOptim_v3.eps", 
+         width = 8.3, height = 4.15, #in inches
+         pointsize = 10, fallback_resolution = 2400)
+opt.plot
+dev.off()
 
 ##-------------------------------------------------------
 ## Plotting path diagrams
@@ -162,7 +200,7 @@ start.formulas.6.sqr
 #                    - input_model: models to be plotted
 #                    - identifier to be added to output file name
 #                    - best_rs = spatial resolution r of models to be selected
-plotting.fct = function(input_model, ID, best_rs){
+plotting.fct = function(input_model, ID, best_rs) {
   # --> best model is in sem_results_3
   f_test_best = model_interpretation(input_model)[[1]] %>%
     filter(P.Value > .05)
@@ -182,7 +220,7 @@ plotting.fct = function(input_model, ID, best_rs){
         dplyr::select(paths) %>% unlist
     }
   })
-  
+
   # create table for support of paths #
   path.support = data.frame(paths = unlist(paths_robust)) %>%
     count(paths) %>%
@@ -207,7 +245,7 @@ plotting.fct = function(input_model, ID, best_rs){
     fillcolor = "white",
     width = 1
   )
-  
+
   # define position and labels of variables
   attr.table = data.frame(
     y = c(10, 7, 4, 1, 1, 4, 7,  9,  8,  7,  6,  5, 4,  3,  2),
@@ -224,68 +262,77 @@ plotting.fct = function(input_model, ID, best_rs){
       "Coastline\ndistance", "Agricultural\nland cover", "Population\ndensity",
       "T", "P", "T", "P", "T", "P", "T", "P"
     ),
-    fontsize = 14,
+    new.labels.short = c(
+      "MP", "MN", 
+      "MC","MC\n(-1)",
+      "CD", "AL", "PD",
+      "T", "P", "T", "P", "T", "P", "T", "P"
+    ),
     shape = "circle")
   
+  if(ID == "newvars") {
+    attr.table = rbind(attr.table,
+          data.frame(
+            y = c(11, 11), x = c(4, 6),
+            nodes = c("t_healthcare_motor.median", "ITN_access_mean_median"),
+            new.labels = c("Motorised\ntravel", "ITN\naccess"),
+            new.labels.short = c("MT", "ITN"),
+            shape = "circle"
+          ))
+  }
+
   # plotting SEMs
-  pblapply(best_rs, function(r) {
+  graph_plot = function(r, graph.type) {
     graph.plot = best_model[[r]][[1]] %>%
       join_node_attrs(df = attr.table, by_df = "nodes", by_graph ="nodes") %>%
-      mutate_node_attrs(label = new.labels,
-                        width = ifelse(x == 10, 0.5, 1.5)) %>%
+      mutate_node_attrs(label = get(ifelse(graph.type == "large",
+                                           "new.labels",
+                                           "new.labels.short")),
+                        width = if(graph.type == 'large') {
+                          ifelse(x == 10, 0.5, 1.5)
+                          } else {ifelse(x == 10, 1, 1.8)},
+                        fontsize = if(graph.type == "large") {14} else{25}
+                        ) %>%
       drop_node_attrs(new.labels) %>%
       join_edge_attrs(path.support) %>%
-      mutate_edge_attrs(color = ifelse(
-        style == "solid",ifelse(as.numeric(label) < 0, "red", "blue"), "grey"
-      ),
-      arrowsize = 1,
-      # define width of paths
-      penwidth = penwidth/5,
-      # position of path labels
-      taillabel = label,
-      label = NA,
-      fontsize = ifelse(style == "solid", 14, 0)) %>%
+      mutate_edge_attrs(
+        color = ifelse(
+          style == "solid",ifelse(as.numeric(label) < 0, "red", "blue"), "grey"
+          ),
+        arrowsize = 1,
+        # define width of paths
+        penwidth = penwidth/5,
+        # position of path labels
+        taillabel = label,
+        label = NA,
+        fontsize = if(graph.type == "large") {
+          ifelse(style == "solid", 14, 0)
+        } else{ifelse(style == "solid", 25, 0)}) %>%
       add_global_graph_attrs(attr = "splines",
                              value = "spline", 
                              attr_type = "graph") %>%
       add_nodes_from_table(clusters, label_col = label, set_type = "cluster")
+
     
     # export figure
-    export_graph(graph.plot, paste0("./Figures/psem_", r, "_", ID, "_v2.svg"),
+    export_graph(graph.plot, paste0("./Figures/psem_", r, "_", ID,
+                                    "_", graph.type, "_v3.svg"),
                  file_type = "svg", title = paste0("r = ", r, " km"),
                  width = 1200, height = 1000) 
-  })
+  }
   
-  # make larger version of paths above
-  pblapply(best_rs, function(r) {
-    graph.plot = best_model[[r]][[1]] %>%
-      join_node_attrs(df = attr.table, by_df = "nodes", by_graph ="nodes") %>%
-      mutate_node_attrs(label = new.labels,
-                        width = ifelse(x == 10, 1, 1.8)) %>%
-      drop_node_attrs(new.labels) %>%
-      join_edge_attrs(path.support) %>%
-      mutate_edge_attrs(color = ifelse(
-        style == "solid",ifelse(as.numeric(label) < 0, "red", "blue"), "grey"
-      ),
-      arrowsize = 1,
-      penwidth = penwidth/5,
-      taillabel = label,
-      label = NA,
-      fontsize = ifelse(style == "solid", 20, 0)) %>%
-      add_global_graph_attrs(attr = "splines",
-                             value = "spline", 
-                             attr_type = "graph") %>%
-      add_nodes_from_table(clusters, label_col = label, set_type = "cluster")
-    
-    export_graph(graph.plot, paste0("./Figures/psem_large_", r, "_", ID,"_v2.svg"),
-                 file_type = "svg", title = paste0("r = ", r, " km"),
-                 width = 1200, height = 1000) 
-  })
+  pblapply(best_rs, function(x) graph_plot(x, "large"))
+  pblapply(best_rs, function(x) graph_plot(x, "small"))
 }
 
-plotting.fct(sem_results_, "", best_rs = c(3,28,40))
-sem_results_small_3[[40]]
-plotting.fct(sem_results_small_3, "small", best_rs = c(3,28,40))
+plotting.fct(sem_results_3, "", best_rs = c(3,28,40))
+
+sem_results_1_newvars = readRDS("./data/sem_results_1_newvars.rds")
+
+plotting.fct(sem_results_1_newvars, "newvars", best_rs = c(3,28,40))
+sem_results_1_newvars[[1]]
+
+plotting.fct(sem_results_2_small, "small_test", best_rs = c(21,36,2))
 
 # plotting initially hypothesised model structure
 graph.plot.init = sem_results_1[[16]][[1]] %>%
@@ -434,63 +481,6 @@ cairo_ps(filename="datacount_v1.eps", width = 8, height = 4, #in inches
 data_overview= plot_grid(coord_plot, radius_plot, labels = c('A', 'B'), 
                          label_size = 12, rel_widths =c(5,5))
 data_overview
-dev.off()
-
-##----------------------------------------------------------------
-## plot model support of optimisation steps
-##----------------------------------------------------------------
-# create two vectors/list to extract results of Fisher's exact test across
-#  all models
-mod.vcts = data.frame(mod = c('m1','m2', 'm3', 'm1','m2','m3','m4', 'm5', 'm6'),
-                      sqr = c('A','A','A','B','B', 'B','B','B','B')
-)
-models = list(sem_results_1, sem_results_2, sem_results_3,
-              sem_results_1_sqr, sem_results_2_sqr, sem_results_3_sqr,
-              sem_results_4_sqr, sem_results_5_sqr, sem_results_6_sqr)
-
-
-
-# extract test results
-model_support = lapply(1:nrow(mod.vcts),
-                       function(m){
-                         # check for errors
-                         lapply(1:50, function(x) {
-                           if(class(models[[m]][[x]]) != "try-error") {
-                             models[[m]][[x]][[3]]
-                           }
-                         })  %>%
-                           bind_rows() %>%
-                           mutate(model = mod.vcts$mod[m],
-                                  sqr = mod.vcts$sqr[m])
-                       }) %>%
-  bind_rows()
-
-# create plot with test results as violin plots
-opt.plot = ggplot(data = model_support, aes(x = model, y = Fisher.C, fill = model)) +
-  geom_violin(trim = F) +
-  theme_minimal() +
-  scale_fill_brewer(palette = "Dark2") +
-  facet_grid(~ sqr, scale = "free") +
-  theme(legend.position = "none",
-        strip.text.x = element_text(
-          size = 12, face = "bold",
-          hjust = 0
-        )) +
-  xlab('Model') + ylab("Fisher's C statistic")
-opt.plot
-
-# export plots
-ps.options(family = "Arial")
-ggsave(filename="./Figures/ModelOptim_v2.svg", device = "svg", 
-       width = 210, height = 105, units = "mm")
-ggsave(filename="./Figures/ModelOptim_v2.png", device = "png", 
-       width = 210, height = 105, units = "mm")
-ggsave(filename="./Figures/ModelOptim_v2.pdf", device = cairo_pdf, 
-       width = 210, height = 105, units = "mm")
-cairo_ps(filename="./Figures/ModelOptim_v2.eps", 
-         width = 8.3, height = 4.15, #in inches
-         pointsize = 10, fallback_resolution = 2400)
-opt.plot
 dev.off()
 
 ##----------------------------------------------------------------------------
