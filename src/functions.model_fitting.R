@@ -1,5 +1,5 @@
 # ==============================================================================
-# SPATIAL SEM OPTIMIZATION ENGINE (Source Functions)
+# SPATIAL SEM OPTIMISATION ENGINE (Source Functions)
 # Description: Contains the core functions to prep data, dynamically update SEM 
 # formulas based on d-separation and p-values, and run parallelised iterations.
 # ==============================================================================
