@@ -6,7 +6,7 @@ By dynamically adjusting the spatial scale, users can visualise how different en
 
 ## Overview
 
-Each path diagram generated in this app represents a **piecewise Structural Equation Model (SEM)**. The 50 models shown here correspond to the main models from Cruz-Laufer et al (in review), with missing data having been imputed and human impact variables (population density, agricultural land cover) and weather variables (mean and anomaly of temperature and precipitation during and 6 months prior to malaria survey period) having been calculated at a fixed radius of 10 km (see the preprint https://ecoevorxiv.org/repository/view/10430/ for more details).
+Each path diagram generated in this app represents a **piecewise Structural Equation Model (SEM)**. The 50 models shown here correspond to the main models from Cruz-Laufer et al (in review), with missing data having been imputed and human impact variables (population density, agricultural land cover) and weather variables (mean and anomaly of temperature and precipitation during and 6 months prior to malaria survey period) having been calculated at a fixed radius of 10 km (see the [preprint](https://ecoevorxiv.org/repository/view/10430/) for more details).
 
 The spatial resolution ($r$) corresponds to the radius (in kilometres) surrounding a malaria survey site. Within this radius, key mangrove variables — specifically **mangrove land cover** and **mangrove NDVI (greenness)** — were calculated. 
 
