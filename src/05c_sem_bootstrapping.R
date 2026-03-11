@@ -27,7 +27,7 @@ library(parallel)
 # ==============================================================================
 
 # --- 1A. Global Setup ---
-source("./src/functions.model_fitting.R")
+source("./src/sem_functions.R")
 
 # Detect and set the number of CPU cores
 numberOfCores <- 36

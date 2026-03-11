@@ -19,7 +19,7 @@ library(DiagrammeR)
 library(tidyr)
 
 # Load custom functions (contains data.prep and model.run)
-source("./src/functions.model_fitting.R")
+source("./src/sem_functions.R")
 
 # --- 1. System & Data Preparation ---
 

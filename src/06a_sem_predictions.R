@@ -11,7 +11,7 @@ library(cowplot)
 # ------------------------------------------------------------------------------
 # 1. LOAD DATA & MODELS
 # ------------------------------------------------------------------------------
-source("./src/functions.model_fitting.R")
+source("./src/sem_functions.R")
 
 all.data.raw = read.csv("./data/alldata.full.csv") %>% data.prep()
 all.data.impute = read.csv("./data/alldata.impute.csv") %>% data.prep()

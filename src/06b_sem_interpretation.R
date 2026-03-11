@@ -46,7 +46,7 @@ library(DiagrammeRsvg)
 ## 2. Load Custom Functions
 ##----------------------------------------------------------##
 # Load helper functions for model fitting and comparison
-source("./src/functions.model_fitting.R")
+source("./src/sem_functions.R")
 
 ##----------------------------------------------------------##
 ## 3. Robustness Checks (Heatmap Generation)
