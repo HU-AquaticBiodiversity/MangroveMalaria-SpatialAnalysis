@@ -118,7 +118,7 @@ start.formulas_1_sqr <- lapply(1:3, function(s) {
 # --- 4. Model Execution & Optimization ---
 
 ## NOTE: The 'model.run' function handles the parallel execution.
-## If using a Linux HPC, it likely uses mclapply. If Windows, it should use parLapply.
+## It uses mclapply and, therefore, only runs on a Linux environment. If you use Windows, switch to parLapply.
 
 ## Optimisation steps executed inside model.run():
 ##  - 1: Default baseline model
